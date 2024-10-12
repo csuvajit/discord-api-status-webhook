@@ -3,17 +3,18 @@ import * as fs from "fs";
 import {ColorResolvable, DiscordAPIError, MessageEmbed, WebhookClient} from "discord.js";
 import {time} from "@discordjs/builders";
 import {join} from "node:path";
-import * as config from "./config.json";
 const _ = require("lodash");
 
 const apiUrl = "https://discordstatus.com/api/v2/incidents.json";
-const cacheFileName = join(__dirname, "messages.json");
+const cacheFileName = join(__dirname, "assets/messages.json");
 
-const ignoreDays = config["ignoreDays"]??30;
+console.log({apiUrl, cacheFileName});
+
+const ignoreDays = 3;
 const ignoreTime = ignoreDays * 86400000;
 console.log(`Ignoring incidents from ${ignoreDays} days ago (${ignoreTime} ms).`);
 
-const webhookClient = new WebhookClient({url: config.url});
+const webhookClient = new WebhookClient({url: process.env.DISCORD_WEBHOOK_URL});
 
 /**
  * Checks if a message exists for the given incident. If so, the message will be updated, if there are new updates to
@@ -32,25 +33,25 @@ async function checkIncident(incident: any) {
 
     // check if message exists, if not create a new one
     let messageId = await getMessageIdOfIncident(id);
-    if (messageId === undefined) {
+    if (!messageId) {
         await createMessage(incident);
         return;
     }
 
     // fetch the old message
-    let message = undefined;
+    let message;
     try {
         message = await webhookClient.fetchMessage(messageId);
-    } catch (e) {
+    } catch (error) {
         // message most likely was deleted - send a new one
-        if (e === DiscordAPIError) {
+        if (error instanceof DiscordAPIError) {
             await createMessage(incident);
             return;
         }
     }
 
     // message does not exist anymore - send a new one
-    if (message === undefined) {
+    if (!message) {
         await createMessage(incident);
         return;
     }
@@ -78,8 +79,8 @@ function buildIncidentEmbed(incident: any) : MessageEmbed {
     const embed = new MessageEmbed()
         .setTitle(incident.name)
         .setURL(incident.shortlink)
+        .setAuthor({ name: "Discord API Status", iconURL: "https://cdn.discordapp.com/attachments/609273140102692864/1294345366375895071/discord.png?ex=670aac8f&is=67095b0f&hm=cc251672b448732e40b0f54cc4ed75e9479f0bb9da4018bbacf563cbf173fb5c&" })
         .setColor(getStatusColor(incident.status))
-        .setFooter(incident.id)
         .setTimestamp(incident.updated_at);
 
     // collect affected components
@@ -95,7 +96,12 @@ function buildIncidentEmbed(incident: any) : MessageEmbed {
     for (let i in incident.incident_updates) {
         let update = incident.incident_updates[i];
         let timeString = " (" + time(new Date(update.created_at), "R") + ")";
-        embed.addField(_.startCase(update.status) + timeString, update.body, false);
+        embed.addFields({
+            name: _.startCase(update.status) + timeString,
+            value: update.body,
+            inline: false
+        });
+
     }
     embed.fields.reverse();
     return embed;
@@ -128,6 +134,10 @@ async function updateMessage(message, incident: any) {
     });
 }
 
+async function deleteMessage(messageId: string) {
+    await webhookClient.deleteMessage(messageId);
+}
+
 /**
  * Runs the checks for updated incidents.
  */
@@ -152,7 +162,6 @@ async function start() {
  */
 async function sendIncident(incident: any) {
     const res = await webhookClient.send({
-        content: `<@&1114911055123070997>`,
         embeds: [buildIncidentEmbed(incident)],
     });
     return res.id;
